@@ -1,0 +1,62 @@
+🧮 VAT (KDV) CALCULATION STRATEGY - CRITICAL INSTRUCTIONS
+
+1. TURKISH VAT SYSTEM BASICS:
+   - Common rates: 1%, 8%, 10%, 18%, 20%
+   - DEFAULT: KDV Dahil (VAT INCLUDED in prices)
+
+2. VAT CALCULATION FORMULA (KDV Dahil):
+   For an item showing 118₺ with 18% VAT:
+   • VAT Amount = 118 / 1.18 × 0.18 = 18₺
+   • Base Amount = 118 - 18 = 100₺
+   
+   General formula:
+   • VAT = grossAmount / (1 + rate/100) × (rate/100)
+   • Base = grossAmount - VAT
+
+3. LINE ITEM PARSING:
+   For EACH product/service, calculate:
+   - grossAmount: Total price shown
+   - vatRate: VAT percentage (10, 18, 20, etc.)
+   - vatAmount: VAT portion (use formula above)
+
+4. VAT BREAKDOWN AGGREGATION:
+   After parsing all items:
+   - Group items by VAT rate
+   - Sum all 10% items together → One breakdown entry
+   - Sum all 18% items together → One breakdown entry
+   - Each entry shows: vatRate, taxBase, vatAmount
+
+5. VALIDATION:
+   ✓ Each line: grossAmount = baseAmount + vatAmount
+   ✓ Total: Sum of all vatBreakdown.totalAmount = Grand Total
+   ✓ Allow ±0.50₺ rounding tolerance
+
+6. COMMON MISTAKES TO AVOID:
+   ❌ WRONG: vat = grossAmount × rate (this adds VAT on top)
+   ✅ RIGHT: vat = grossAmount / (1 + rate) × rate (this extracts included VAT)
+   
+   ❌ WRONG: One breakdown entry per item
+   ✅ RIGHT: One breakdown entry per unique VAT RATE
+
+7. OUTPUT STRUCTURE:
+   {
+     "items": [
+       {
+         "description": "Motorin",
+         "grossAmount": 1742.25,
+         "vatRate": 10,
+         "vatAmount": 158.39  // Calculated using formula
+       }
+     ],
+     "totals": {
+       "vatBreakdown": [
+         {
+           "vatRate": 10,
+           "taxBase": 1583.86,  // Sum of all 10% item bases
+           "vatAmount": 158.39   // Sum of all 10% item VATs
+         }
+       ]
+     }
+   }
+
+REMEMBER: Turkish receipts show final prices WITH VAT included. Your job is to extract the hidden VAT portion using reverse calculation.
