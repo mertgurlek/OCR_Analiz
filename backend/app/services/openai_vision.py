@@ -3,6 +3,11 @@ from .base import BaseOCRService
 from openai import AsyncOpenAI
 import base64
 import json
+import logging
+from .prompt_manager import PromptManager
+
+
+logger = logging.getLogger(__name__)
 
 
 class OpenAIVisionService(BaseOCRService):
@@ -27,18 +32,23 @@ class OpenAIVisionService(BaseOCRService):
         
         self.client = AsyncOpenAI(api_key=api_key)
         self.model = config.get("model", "gpt-4o")  # gpt-4o daha hızlı ve ucuz
+        
+        # Prompt Manager
+        self.prompt_manager = PromptManager()
     
     async def process_image(
         self,
         image_bytes: bytes,
-        prompt: Optional[str] = None
+        prompt: Optional[str] = None,
+        prompt_version: Optional[int] = None
     ) -> Dict[str, Any]:
         """
         OpenAI Vision ile görseli işle
         
         Args:
             image_bytes: Görsel verisi
-            prompt: Custom prompt (varsayılan OCR prompt'u)
+            prompt: Custom prompt (varsa kullanılır)
+            prompt_version: Prompt versiyonu (None ise güncel versiyon)
             
         Returns:
             OCR sonucu
@@ -47,7 +57,17 @@ class OpenAIVisionService(BaseOCRService):
             # Görseli base64'e çevir
             base64_image = base64.b64encode(image_bytes).decode('utf-8')
             
-            # Prompt oluştur
+            # Prompt al (önce custom, yoksa prompt manager'dan)
+            if not prompt:
+                prompt_data = self.prompt_manager.get_prompt(
+                    model_name=self.model_name,
+                    version=prompt_version
+                )
+                prompt = prompt_data.get("prompt", "")
+                used_version = prompt_data.get("version")
+                logger.info(f"🤖 Using OpenAI Vision prompt v{used_version}")
+            
+            # Fallback: Eğer hala prompt yoksa, basit bir prompt kullan
             if not prompt:
                 prompt = """Sen bir Türk muhasebe ve OCR uzmanısın. Bu fiş/fatura görselinden EKSIKSIZ ve DOĞRU bilgi çıkaracaksın.
 
@@ -157,27 +177,39 @@ Bu görseldeki TÜM metni satır satır, kelime kelime, HARFI HARFINE oku ve ç�
             text = content
             
             try:
-                # JSON bulma
-                if "```json" in content:
-                    json_str = content.split("```json")[1].split("```")[0].strip()
-                elif "```" in content:
-                    json_str = content.split("```")[1].split("```")[0].strip()
-                else:
-                    json_str = content.strip()
+                # JSON bulma ve temizleme
+                json_str = content.strip()
                 
+                # Markdown code block varsa temizle
+                if "```json" in json_str:
+                    json_str = json_str.split("```json")[1].split("```")[0].strip()
+                elif "```" in json_str:
+                    json_str = json_str.split("```")[1].split("```")[0].strip()
+                
+                # JSON parse et
                 parsed = json.loads(json_str)
                 
-                if "raw_text" in parsed:
-                    text = parsed["raw_text"]
-                if "structured" in parsed:
-                    structured_data = parsed["structured"]
-                elif "text" not in parsed:
-                    # Eğer tam yapılandırılmış değilse, tüm parse'ı kullan
-                    structured_data = parsed
+                # V2 Schema formatı kontrolü
+                if isinstance(parsed, dict):
+                    # Yeni V2 format (metadata, document, items, totals)
+                    if all(key in parsed for key in ["metadata", "document", "items", "totals"]):
+                        structured_data = parsed
+                        logger.info("✅ V2 schema detected")
+                    # Eski V1 format (raw_text, structured)
+                    elif "raw_text" in parsed and "structured" in parsed:
+                        text = parsed["raw_text"]
+                        structured_data = parsed["structured"]
+                        logger.info("✅ V1 schema detected (legacy)")
+                    # Direkt structured data
+                    else:
+                        structured_data = parsed
+                        logger.info("✅ Direct JSON structure")
                     
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as e:
                 # JSON parse edilemezse, content'i text olarak kullan
+                logger.warning(f"⚠️ JSON parse error: {str(e)}")
                 text = content
+                structured_data = None
             
             # Token usage
             token_count = response.usage.total_tokens

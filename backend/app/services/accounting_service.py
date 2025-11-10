@@ -119,11 +119,62 @@ class AccountingService:
         Args:
             model_name: Model adı
             text_content: OCR metni
+            entities: Entities (Google DocAI için)
+            structured_data: Yapılandırılmış veri (OpenAI Vision için)
             
         Returns:
             Dict containing accounting data for this model
         """
         start_time = time.time()
+        
+        # ⚡ OPTIMIZATION: Eğer model zaten V2 formatında structured data döndürmüşse, direkt kullan!
+        if structured_data:
+            logger.info(f"🔍 {model_name} structured_data mevcut: {type(structured_data)}")
+            logger.debug(f"   Keys: {list(structured_data.keys()) if isinstance(structured_data, dict) else 'Not a dict'}")
+        
+        if structured_data and isinstance(structured_data, dict):
+            if all(key in structured_data for key in ["metadata", "document", "items", "totals"]):
+                logger.info(f"🚀 {model_name} zaten V2 formatında JSON döndürmüş, GPT'ye göndermeden direkt kullanıyorum!")
+                
+                # Model-specific parser ile normalize et
+                prompt_data = self.prompt_manager.get_prompt(model_name)
+                prompt_version = prompt_data.get("version", 1)
+                schema_version = prompt_data.get("schema_version", "v1")
+                
+                logger.info(f"📦 Using prompt v{prompt_version}, schema: {schema_version}")
+                
+                # Eğer zaten V2 formatındaysa ve schema da V2 ise, direkt kullan (parser'a gerek yok)
+                if schema_version == "v2":
+                    logger.info("✅ V2 schema confirmed, using data as-is")
+                    normalized_data = structured_data
+                else:
+                    # V1 schema ise parser kullan
+                    model_parser = get_model_parser(model_name)
+                    normalized_data = model_parser.parse(structured_data, prompt_version)
+                
+                logger.info(f"✅ Direct use: {len(normalized_data.get('items', []))} items, "
+                           f"total: {normalized_data.get('totals', {}).get('totalAmount')}")
+                
+                # AccountingData modeline çevir
+                accounting_data = self._parse_to_accounting_data(normalized_data)
+                
+                # Frontend V1 formatına çevir
+                accounting_data_v1 = self._convert_v2_to_v1_format(accounting_data)
+                
+                processing_time = (time.time() - start_time) * 1000
+                
+                return {
+                    "model_name": model_name,
+                    "accounting_data": accounting_data_v1,
+                    "raw_gpt_response": json.dumps(structured_data, ensure_ascii=False),
+                    "processing_time_ms": processing_time,
+                    "estimated_cost": 0.0,  # Direkt kullanım, GPT maliyeti yok
+                    "token_usage": {
+                        "input": 0,
+                        "output": 0,
+                        "total": 0
+                    }
+                }
         
         # GPT'ye gönderilecek prompt (entities ve structured_data dahil)
         prompt = self._create_accounting_prompt_single(model_name, text_content, entities, structured_data)
@@ -297,6 +348,26 @@ Senin çıktın muhasebe analizine gidecek. Mümkün olan en yüksek doğruluk v
 Tarih, tutar, firma adı gibi bilgiler için öncelikle bunlara bak!
 """
         
+        # Structured data hazırla (OpenAI Vision için)
+        structured_section = ""
+        if structured_data and isinstance(structured_data, dict):
+            # V2 schema formatı kontrolü
+            if all(key in structured_data for key in ["metadata", "document", "items", "totals"]):
+                # Direkt V2 formatı var, bunu kullan!
+                logger.info(f"✅ {model_name} zaten V2 formatında structured data döndürmüş, direkt kullanıyorum!")
+                structured_json = json.dumps(structured_data, ensure_ascii=False, indent=2)
+                structured_section = f"""
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ ÖN-PARSE EDİLMİŞ YAPISAL VERİ ({model_name})
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+{structured_json}
+
+⚡ BU VERİYİ DOĞRULA VE DÜZELT: {model_name} modeli zaten yapısal analiz yapmış.
+Bu JSON'u kontrol et, eksik/hatalı alanları düzelt, ve aynı formatta döndür.
+OCR metnini sadece eksik bilgileri tamamlamak için kullan.
+"""
+        
         return f"""📄 FİŞ ANALİZİ GÖREVİ
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -306,6 +377,8 @@ Tarih, tutar, firma adı gibi bilgiler için öncelikle bunlara bak!
 {model_specific_instructions}
 
 {entities_section}
+
+{structured_section}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📝 OCR METNİ {text_info}

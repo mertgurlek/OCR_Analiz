@@ -253,9 +253,24 @@ Bu OCR çıktısı Amazon Textract tarafından üretildi - HIZLI ve BASİT text 
         
         return result
     
-    def get_prompt(self, model_name: str) -> Dict:
-        """Model için aktif prompt'u getir"""
-        # Dosyadan yükle
+    def get_prompt(self, model_name: str, version: Optional[int] = None) -> Dict:
+        """
+        Model için prompt'u getir
+        
+        Args:
+            model_name: Model adı
+            version: Versiyon numarası (None ise güncel versiyon)
+            
+        Returns:
+            Prompt verisi
+        """
+        # Belirli bir versiyon istendiyse
+        if version is not None:
+            versioned_data = self.load_version(model_name, version)
+            if versioned_data:
+                return versioned_data
+        
+        # Güncel versiyonu yükle
         data = self._load_prompt_file(model_name)
         
         # Dosya yoksa varsayılan prompt'u kullan
@@ -266,14 +281,25 @@ Bu OCR çıktısı Amazon Textract tarafından üretildi - HIZLI ve BASİT text 
                 # Genel varsayılan
                 return {
                     "version": 1,
+                    "schema_version": "v1",
                     "created_at": datetime.now().isoformat(),
                     "prompt": "OCR metnini dikkatli analiz et ve yapılandırılmış muhasebe verisi çıkar."
                 }
         
         return data
     
-    def save_prompt(self, model_name: str, new_prompt: str) -> Dict:
-        """Yeni prompt'u kaydet ve versiyon artır"""
+    def save_prompt(self, model_name: str, new_prompt: str, schema_version: Optional[str] = None) -> Dict:
+        """
+        Yeni prompt'u kaydet ve versiyon artır
+        
+        Args:
+            model_name: Model adı
+            new_prompt: Yeni prompt metni
+            schema_version: Schema versiyonu (None ise otomatik belirlenir)
+            
+        Returns:
+            Kaydedilen prompt verisi
+        """
         # Mevcut prompt'u yükle
         current_data = self._load_prompt_file(model_name)
         
@@ -284,10 +310,14 @@ Bu OCR çıktısı Amazon Textract tarafından üretildi - HIZLI ve BASİT text 
             # Versiyon artır
             new_version = current_data.get("version", 1) + 1
         
+        # Schema version belirle
+        if schema_version is None:
+            schema_version = self._determine_schema_version(new_version)
+        
         # Yeni veriyi hazırla
         new_data = {
             "version": new_version,
-            "schema_version": self._determine_schema_version(new_version),
+            "schema_version": schema_version,
             "created_at": datetime.now().isoformat(),
             "prompt": new_prompt,
             "previous_version": current_data.get("version") if current_data else None
